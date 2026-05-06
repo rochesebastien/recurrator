@@ -3,12 +3,14 @@ mod notes;
 mod search;
 
 use crate::notes::NotesStore;
+use std::path::Path;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let store = NotesStore::new();
-    let notes_dir = dirs::home_dir()
-        .expect("home directory not found")
+    let notes_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("CARGO_MANIFEST_DIR has no parent")
         .join("notes");
     store.load_all(&notes_dir);
 
