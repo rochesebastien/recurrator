@@ -23,6 +23,7 @@ nucleo-matcher = "0.3"
 notify = "6"
 notify-debouncer-full = "0.3"
 serde_yaml = "0.9"
+tiny_http = "0.12"
 
 [profile.release]
 codegen-units = 1

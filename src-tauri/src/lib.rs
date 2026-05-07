@@ -1,3 +1,4 @@
+mod capture;
 mod commands;
 mod notes;
 mod query;
@@ -23,6 +24,7 @@ pub fn run() {
 
     let store_for_watcher = Arc::clone(&store);
     let watcher_dir = notes_dir.clone();
+    let capture_dir = notes_dir.clone();
 
     let toggle_shortcut = Shortcut::new(
         Some(Modifiers::CONTROL | Modifiers::SHIFT),
@@ -52,6 +54,7 @@ pub fn run() {
             app.global_shortcut().register(toggle_shortcut)?;
             build_tray(app.handle())?;
             watcher::spawn(store_for_watcher, &watcher_dir);
+            capture::spawn(capture_dir.clone());
             Ok(())
         })
         .on_window_event(|window, event| {
