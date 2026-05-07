@@ -24,6 +24,7 @@ pub struct Note {
 pub struct NoteDto {
     pub path: String,
     pub content: String,
+    pub body: String,
     pub frontmatter: Frontmatter,
 }
 
@@ -32,6 +33,7 @@ impl From<&Note> for NoteDto {
         Self {
             path: n.path.to_string_lossy().into_owned(),
             content: n.content.clone(),
+            body: n.body.clone(),
             frontmatter: n.frontmatter.clone(),
         }
     }

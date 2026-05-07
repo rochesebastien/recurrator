@@ -19,6 +19,7 @@ export type Frontmatter = {
 export type NoteDto = {
   path: string;
   content: string;
+  body: string;
   frontmatter: Frontmatter;
 };
 

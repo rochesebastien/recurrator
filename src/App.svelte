@@ -1,6 +1,15 @@
 <script lang="ts">
   import { search, getNote, saveNote, type Match, type SearchMode } from './lib/api';
   import Editor from './lib/Editor.svelte';
+  import Preview from './lib/Preview.svelte';
+
+  type ViewMode = 'edit' | 'preview';
+
+  function stripFrontmatter(content: string): string {
+    const m = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+    if (!m) return content;
+    return content.slice(m[0].length);
+  }
 
   let query = $state('');
   let mode = $state<SearchMode>('literal');
@@ -10,6 +19,8 @@
   let currentPath = $state<string | null>(null);
   let currentContent = $state<string>('');
   let savedContent = $state<string>('');
+  let viewMode = $state<ViewMode>('edit');
+  let currentBody = $derived(stripFrontmatter(currentContent));
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   let saveStatus = $state<'idle' | 'saving' | 'saved'>('idle');
   let savedFlashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -43,6 +54,7 @@
       currentPath = null;
       currentContent = '';
       savedContent = '';
+      viewMode = 'edit';
     }
   }
 
@@ -64,6 +76,7 @@
     currentPath = note.path;
     currentContent = note.content;
     savedContent = note.content;
+    viewMode = 'edit';
     query = '';
     results = [];
   }
@@ -168,12 +181,36 @@
     <section class="editor-pane">
       <header class="editor-header">
         <span class="editor-path">{currentPath}</span>
+        <div class="view-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'edit'}
+            class:active={viewMode === 'edit'}
+            onclick={() => (viewMode = 'edit')}
+          >
+            edit
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'preview'}
+            class:active={viewMode === 'preview'}
+            onclick={() => (viewMode = 'preview')}
+          >
+            preview
+          </button>
+        </div>
         <span class="save-indicator save-{saveStatus}">
           {#if saveStatus === 'saving'}saving…{:else if saveStatus === 'saved'}saved{:else}&nbsp;{/if}
         </span>
       </header>
       <div class="editor-body">
-        <Editor content={currentContent} onChange={onEditorChange} />
+        {#if viewMode === 'edit'}
+          <Editor content={currentContent} onChange={onEditorChange} />
+        {:else}
+          <Preview content={currentBody} />
+        {/if}
       </div>
     </section>
   {/if}
