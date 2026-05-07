@@ -11,23 +11,31 @@ No DB, no cloud, no persistent index — every search rescans loaded notes.
 - **Search core**: `memchr::memmem` for literal, `nucleo-matcher` for fuzzy.
 - **Walker**: `ignore` crate with all ignore filters disabled — the notes folder is not a repo,
   hidden files and `.gitignore` rules must NOT exclude content.
+- **Watcher**: `notify` + `notify-debouncer-full` (200ms debounce) on `<repo>/notes`.
+- **Editor**: CodeMirror 6 (`codemirror`, `@codemirror/lang-markdown`, `@codemirror/theme-one-dark`)
+  with custom theme overrides matching the design tokens.
+- **Preview**: `markdown-it` (html: true, linkify, typographer) + `mermaid` (lazy-init).
+- **HTTP capture**: `tiny_http` (sync, single thread) on `127.0.0.1:51234`.
 - **No DB / no SQLite / no persistent index.** Notes load to RAM at startup.
-- **No HTTP server in-process** until slice 7 (Chrome capture). Until then, IPC only.
 
 ## Where we are
 
-Slices in order. Done unless flagged.
+All slices in the original roadmap are landed.
 
 - [x] **0** — load notes, literal search via memmem, IPC plumbing, basic UI.
 - [x] **1a** — highlight literal matches (UTF-16 offsets across IPC).
 - [x] **1b** — fuzzy via nucleo (filename + content, name boost ×1.5), Ctrl+L toggle.
 - [x] **UI redesign** — Geist + warm ambient gradient + frosted-glass palette. See DESIGN.md.
-- [ ] **2** — global hotkey, tray icon, fs watcher (`notify`) with debounce.
-- [ ] **3** — YAML frontmatter, filterable search (`tag:`, `code:`, `id:`).
-- [ ] **4** — CodeMirror 6 editor + debounced autosave. Beware echo loop with the watcher.
-- [ ] **5** — markdown-it preview (Mermaid, GFM tables, inline HTML).
-- [ ] **6** — split view 2 notes.
-- [ ] **7** — local HTTP endpoint for Chrome capture extension.
+- [x] **2** — global hotkey (Ctrl+Shift+Space), tray icon (Show/Hide/Quit), fs watcher.
+- [x] **3** — YAML frontmatter, filterable search (`tag:`, `code:`, `id:`).
+- [x] **4** — CodeMirror 6 editor + 500ms debounced autosave (echo-loop guarded via
+  Transaction.isUserEvent).
+- [x] **5** — markdown-it preview (Mermaid, GFM tables, inline HTML). Edit/Preview toggle
+  in the pane header.
+- [x] **6** — split view (max 2 panes). Ctrl+Shift+click on a result opens in pane 2.
+- [x] **7** — HTTP capture endpoint at `POST /capture` for the Chrome extension.
+
+Roadmap items beyond the original spec live in the issue tracker, not here.
 
 ## Constraints
 
@@ -43,14 +51,27 @@ Slices in order. Done unless flagged.
 ```
 src-tauri/src/
   main.rs       — windows_subsystem flag + gdidiot_lib::run()
-  lib.rs        — load store, manage State, generate_handler, run
-  notes.rs      — Note { path: PathBuf, content: String }, NotesStore (RwLock)
-  search.rs     — SearchMode { Literal, Fuzzy }, search() + utf16 helpers
-  commands.rs   — #[tauri::command] surface (`search`)
+  lib.rs        — setup, plugins, tray, watcher + capture spawn,
+                  window-close intercept (hide instead of close)
+  notes.rs      — Note { path, content, body, frontmatter }, NotesStore (RwLock),
+                  NoteDto for IPC, parse_frontmatter (--- fenced YAML)
+  query.rs      — ParsedQuery, Filter (Tag/Id/Code), parse(), matches_filters()
+  search.rs     — SearchMode { Literal, Fuzzy }, search() entry, UTF-16 offsets,
+                  filter-only path when free-text is empty
+  commands.rs   — search, get_note, save_note (IPC surface)
+  watcher.rs    — debounced fs watcher, upserts/removes in the store
+  capture.rs    — tiny_http server on :51234 for Chrome capture
 src/
-  App.svelte    — palette layout, debounce 50ms, Ctrl+L toggle, highlight()
-  app.css       — design tokens + component styles (see DESIGN.md)
-  lib/api.ts    — invoke wrappers + Match/SearchMode types (mirror Rust)
+  App.svelte    — palette layout, panes orchestration, search UX,
+                  result highlight rendering
+  app.css       — design tokens + every rule that styles {@html} content
+                  (preview prose), since Svelte's scoped styles don't reach there
+  lib/
+    api.ts          — invoke wrappers + Match/SearchMode/NoteDto/Frontmatter types
+    Editor.svelte   — CodeMirror 6 wrapper, userEvent-guarded onChange
+    Preview.svelte  — markdown-it render + mermaid run on .mermaid nodes
+    NotePane.svelte — owns one pane (path, content, save state, view mode);
+                      exports flushSave() for the host to call before navigation
 ```
 
 `src/lib/api.ts` is the only boundary between front and Rust commands.
@@ -81,6 +102,9 @@ npm run tauri dev              # dev (cold Rust build ~5 min, then incremental)
 npm run check                  # svelte-check
 cd src-tauri && cargo check    # Rust-only fast check
 py generate_test_notes.py      # regenerate <repo>/notes fixtures
+curl -X POST http://127.0.0.1:51234/capture \
+  -H 'content-type: application/json' \
+  -d '{"title":"hello","body":"# Hi\n\nfrom curl"}'
 ```
 
 ## Gotchas
@@ -94,12 +118,30 @@ py generate_test_notes.py      # regenerate <repo>/notes fixtures
   terminal or prepend `~/.cargo/bin` once.
 - **Windows `~`** is not expanded by Rust. We use `CARGO_MANIFEST_DIR`; do not
   reintroduce `dirs::home_dir()` for the notes path.
+- **CodeMirror onChange must filter for user events** (`Transaction.isUserEvent('input'|'delete'|'move')`),
+  otherwise switching notes triggers a save of the new note's content under the
+  new path immediately on `setState`. The Editor component already does this.
+- **Save flush before navigation** — the host (App.svelte) calls `flushAllPanes()`
+  before changing the panes array. NotePane also flushes on `onDestroy`, but only
+  best-effort (fire-and-forget).
+- **mermaid is lazy-initialized** the first time a preview contains a `.mermaid`
+  node. `securityLevel: 'loose'` is required so arrow markers render correctly.
+- **Capture port 51234** is hardcoded. If it's in use, the server logs and skips
+  silently — the rest of the app stays up. No automatic fallback port.
+- **Inline HTML in preview** is allowed (`html: true` in markdown-it). Trust
+  assumption: the user is the only writer; this is NOT a multi-tenant app.
+- **Tauri 2 plugin permissions**: any plugin (e.g. `tauri-plugin-global-shortcut`)
+  needs an entry in `capabilities/default.json` (currently `core:default` and
+  `global-shortcut:default`).
 
 ## Don'ts
 
 - Don't add a database, persistent index, or migration layer.
 - Don't add cloud sync, login, or telemetry.
-- Don't add a config file before slice 3 (frontmatter ships first).
+- Don't add a config file for behavior tuning yet — once we have one need
+  (port override, notes dir override, …) we'll do it once for all of them.
 - Don't generalize `search` behind a trait until there are 3+ modes.
-- Don't introduce error-handling layers for slice-0 invariants — `unwrap()` on
-  the lock is fine; mutations land at slice 2 with the watcher.
+- Don't introduce error-handling layers for hosted-only invariants —
+  `unwrap()` on the lock is fine; the watcher re-reads if the disk changes.
+- Don't push frontmatter changes from the editor through anything but
+  `save_note(path, content)`. The watcher round-trip is the source of truth.
